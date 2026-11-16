@@ -21,3 +21,5 @@ logs/
 .vs/
 UpgradeLog*.htm
 Backup/
+
+/src

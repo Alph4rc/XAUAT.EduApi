@@ -151,6 +151,9 @@ public static class ServiceCollectionExtensions
             });
             services.AddSingleton<IClassTimeService, ClassTimeService>();
             services.AddScoped<ICourseService, CourseService>();
+            services.AddScoped<ILessonSearchService, LessonSearchService>();
+            services.AddHttpClient(LessonSearchService.ClientName)
+                .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
             // 研究生课表：只在 x-loginMode=1 时由控制器选中，不参与本科生链路
             services.AddScoped<IGraduateCourseService, GraduateCourseService>();
             // 日历订阅：课程/考试数据复用上面的 CourseService/ExamService，
