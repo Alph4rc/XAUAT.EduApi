@@ -69,6 +69,22 @@ public class StudentRateLimitStateTests
     }
 
     [Fact]
+    public async Task StudentRateLimitExecutor_ShouldKeepCooldown_WhenAnEarlierRequestSucceeds()
+    {
+        var state = new StudentRateLimitState();
+        var executor = new StudentRateLimitExecutor(state);
+        var earlierRequest = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var successful = executor.ExecuteAsync(["A"], () => earlierRequest.Task);
+
+        await Assert.ThrowsAsync<XAUAT.EduApi.Exceptions.RateLimitException>(() =>
+            executor.ExecuteAsync<int>(["A"], () => throw new XAUAT.EduApi.Exceptions.RateLimitException()));
+        earlierRequest.SetResult(1);
+
+        Assert.Equal(1, await successful);
+        Assert.True(state.TryGetBlockedUntil(KeyA, out _));
+    }
+
+    [Fact]
     public void RateLimitKeys_ShouldBePerStudentId()
     {
         var key1 = HttpContextStudentExtensions.CreateRateLimitStateKeys(["20230001"]).Single();

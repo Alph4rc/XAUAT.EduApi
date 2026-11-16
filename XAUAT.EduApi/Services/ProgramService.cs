@@ -54,7 +54,6 @@ public class ProgramService(
                 var retryPolicy = Policy
                     .Handle<HttpRequestException>()
                     .Or<TaskCanceledException>()
-                    .Or<RateLimitException>()
                     .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(6 * Math.Pow(2, retryAttempt - 1)));
 
                 return await _rateLimitExecutor.ExecuteAsync([id], () =>
@@ -67,7 +66,8 @@ public class ProgramService(
                         using var httpClient = httpClientFactory.CreateClient();
                         httpClient.Timeout = TimeSpan.FromSeconds(5);
 
-                        var response = await httpClient.SendAsync(request);
+                        using var response = await httpClient.SendAsync(request);
+                        response.ThrowIfRateLimited();
                         if (!response.IsSuccessStatusCode) return [];
                         var content = await response.Content.ReadAsStringAsync();
 

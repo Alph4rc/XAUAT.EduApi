@@ -72,10 +72,15 @@ public static class HttpClientExtensions
         }
     }
 
-    /// <summary>
-    /// 检查响应内容是否为限流页面，如果是则抛出RateLimitException
-    /// </summary>
-    /// <param name="content">响应内容字符串</param>
+    public static void ThrowIfRateLimited(this HttpResponseMessage response)
+    {
+        if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            throw new RateLimitException();
+        }
+    }
+
+    /// <summary>检查响应内容是否为学校教务系统的限流页面。</summary>
     public static void ThrowIfRateLimited(this string content)
     {
         if (content.Contains("系统限流中") || content.Contains("error-limit"))

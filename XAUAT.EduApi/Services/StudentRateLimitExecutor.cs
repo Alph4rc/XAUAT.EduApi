@@ -21,14 +21,9 @@ public class StudentRateLimitExecutor(
 
         try
         {
-            var result = await action();
-
-            foreach (var rateLimitKey in normalizedKeys)
-            {
-                rateLimitState.MarkSuccess(rateLimitKey);
-            }
-
-            return result;
+            // 进入时没有有效冷却。并发请求可能在本次执行期间触发冷却，
+            // 因此本次成功不能清除其他请求刚写入的状态。
+            return await action();
         }
         catch (RateLimitException)
         {

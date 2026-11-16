@@ -128,8 +128,10 @@ public class ExamService(
                     client.Timeout = HttpTimeouts.EduSystem;
                     client.DefaultRequestHeaders.Add("Cookie", cookie);
 
-                    var html = await client.GetStringAsync("https://swjw.xauat.edu.cn/student/for-std/course-table");
-
+                    using var response = await client.GetAsync("https://swjw.xauat.edu.cn/student/for-std/course-table");
+                    response.ThrowIfRateLimited();
+                    response.EnsureSuccessStatusCode();
+                    var html = await response.Content.ReadAsStringAsync();
                     html.ThrowIfAuthOrRateLimited();
 
                     return html.ParseNow(info);
@@ -183,7 +185,7 @@ public class ExamService(
                 url += $"info/{id}?";
             }
 
-            var httpClient = httpClientFactory.CreateClient();
+            using var httpClient = httpClientFactory.CreateClient();
             httpClient.SetRealisticHeaders();
             httpClient.Timeout = HttpTimeouts.EduSystem;
 
@@ -199,39 +201,11 @@ public class ExamService(
                 requestStudentIds ?? [],
                 () => retryPolicy.ExecuteAsync(async ct =>
                 {
-                    var requestPolicy = new HttpRequestMessage(HttpMethod.Get, url).WithCookie(cookie);
-                    var response = await httpClient.SendAsync(requestPolicy, ct);
+                    using var requestPolicy = new HttpRequestMessage(HttpMethod.Get, url).WithCookie(cookie);
+                    using var response = await httpClient.SendAsync(requestPolicy, ct);
+                    response.ThrowIfRateLimited();
                     var content = await response.Content.ReadAsStringAsync(ct);
-
-                    // 限流页识别必须放在执行器内部，这样第一次命中才能真正写入冷却状态
-                    try
-                    {
-                        content.ThrowIfAuthOrRateLimited();
-                        if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-                            throw new RateLimitException();
-                    }
-                    catch (Exception)
-                    {
-                        if (string.IsNullOrEmpty(id)) throw;
-                        var data = await examRepository.GetByStudentIdAsync(id);
-
-                        var examRecords = data as ExamRecord[] ?? data.ToArray();
-                        if (examRecords.Length != 0)
-                        {
-                            return new ExamResponse()
-                            {
-                                Exams = examRecords.Select(x => new ExamInfo()
-                                {
-                                    Name = x.Name,
-                                    Time = x.Time,
-                                    Location = x.Location,
-                                    Seat = x.Seat,
-                                }).ToList()
-                            };
-                        }
-
-                        throw;
-                    }
+                    content.ThrowIfAuthOrRateLimited();
 
                     if (!response.IsSuccessStatusCode)
                         throw new InvalidDataException($"考试系统返回 HTTP {(int)response.StatusCode}");
@@ -273,13 +247,22 @@ public class ExamService(
                     };
                 }, cts.Token));
         }
-        catch (RateLimitException)
+        catch (Exception ex) when (ex is RateLimitException or UnAuthenticationError)
         {
-            throw;
-        }
-        catch (UnAuthenticationError)
-        {
-            throw;
+            // 限流执行器已记录冷却，此处仍可返回已有考试安排。
+            if (string.IsNullOrEmpty(id)) throw;
+
+            var data = await examRepository.GetByStudentIdAsync(id);
+            var exams = data.Select(x => new ExamInfo
+            {
+                Name = x.Name,
+                Time = x.Time,
+                Location = x.Location,
+                Seat = x.Seat
+            }).ToList();
+            if (exams.Count == 0) throw;
+
+            return new ExamResponse { Exams = exams };
         }
     }
 

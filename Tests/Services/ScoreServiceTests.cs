@@ -1,4 +1,8 @@
 using Moq;
+using Moq.Protected;
+using System.Net;
+using XAUAT.EduApi.Exceptions;
+using XAUAT.EduApi.Extensions;
 using Microsoft.Extensions.Logging;
 using XAUAT.EduApi.Services;
 using XAUAT.EduApi.Repos;
@@ -220,6 +224,44 @@ public class ScoreServiceTests
 
         Assert.NotNull(result);
         Assert.Empty(result);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, "")]
+    [InlineData(HttpStatusCode.OK, "<html>系统限流中</html>")]
+    public async Task GetScoresAsync_ShouldStopAfterFirstUpstreamRateLimit(HttpStatusCode statusCode, string content)
+    {
+        const string studentId = "123456";
+        const string cookie = "test-cookie";
+        const string semester = "2025-2026-1";
+
+        _cacheServiceMock.Setup(m => m.GetOrCreateAsync(
+                It.IsAny<string>(), It.IsAny<Func<Task<List<ScoreResponse>>>>(),
+                It.IsAny<TimeSpan?>(), It.IsAny<CacheLevel>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+            .Returns((string key, Func<Task<List<ScoreResponse>>> factory, TimeSpan? ttl,
+                CacheLevel level, int priority, CancellationToken ct, bool isUse) => factory());
+        _examServiceMock.Setup(m => m.GetThisSemester(cookie, "zh"))
+            .ReturnsAsync(new SemesterItem { Value = semester });
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => new HttpResponseMessage(statusCode) { Content = new StringContent(content) });
+        _httpClientFactoryMock.Setup(x => x.CreateClient(It.IsAny<string>()))
+            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
+
+        var state = new StudentRateLimitState();
+        var service = new ScoreService(_httpClientFactoryMock.Object, _loggerMock.Object, _examServiceMock.Object,
+            _cacheServiceMock.Object, _scoreRepositoryMock.Object, rateLimitExecutor: new StudentRateLimitExecutor(state));
+
+        await Assert.ThrowsAsync<RateLimitException>(() => service.GetScoresAsync(studentId, semester, cookie));
+        var key = Assert.Single(HttpContextStudentExtensions.CreateRateLimitStateKeys([studentId]));
+        Assert.True(state.TryGetBlockedUntil(key, out _));
+        await Assert.ThrowsAsync<StudentCooldownException>(() => service.GetScoresAsync(studentId, semester, cookie));
+        handler.Protected().Verify("SendAsync", Times.Once(), ItExpr.IsAny<HttpRequestMessage>(),
+            ItExpr.IsAny<CancellationToken>());
     }
 
     [Fact]

@@ -117,6 +117,42 @@ public class EduCrawlerRateLimitFilterTests
             filter.OnActionExecutionAsync(context, () => throw new NotImplementedException()));
     }
 
+    [Fact]
+    public async Task OnActionExecutionAsync_ShouldSkipFurtherLookups_WhenCookieLookupWasRateLimited()
+    {
+        const string cookie = "test-cookie";
+        var cookieCodeService = new Mock<ICookieCodeService>();
+        cookieCodeService.Setup(x => x.GetCode(cookie)).ThrowsAsync(new RateLimitException());
+        var filter = new EduCrawlerRateLimitFilter(new StudentRateLimitState(), cookieCodeService.Object);
+
+        foreach (var path in new[] { "/v1/info/completion", "/v1/score/thissemester" })
+        {
+            var context = BuildContext(controller: new object());
+            context.HttpContext.Request.Path = path;
+            context.HttpContext.Request.Headers["xauat"] = cookie;
+            await Assert.ThrowsAsync<StudentCooldownException>(() =>
+                filter.OnActionExecutionAsync(context, () => throw new NotImplementedException()));
+        }
+
+        cookieCodeService.Verify(x => x.GetCode(cookie), Times.Once);
+    }
+
+    [Fact]
+    public void RequestRateLimitPartition_ShouldBeSharedAcrossPathsForTheSameSession()
+    {
+        var scores = new DefaultHttpContext().Request;
+        scores.Path = "/v1/score";
+        scores.QueryString = new QueryString("?studentId=20230001&semester=2");
+        scores.Headers["xauat"] = "session-a";
+        var progress = new DefaultHttpContext().Request;
+        progress.Path = "/v1/info/completion";
+        progress.Headers["xauat"] = "session-a";
+
+        Assert.Equal(scores.CreateRequestRateLimitPartitionKey(), progress.CreateRequestRateLimitPartitionKey());
+        progress.Headers["xauat"] = "session-b";
+        Assert.NotEqual(scores.CreateRequestRateLimitPartitionKey(), progress.CreateRequestRateLimitPartitionKey());
+    }
+
     private static ActionExecutingContext BuildContext(object controller, Dictionary<string, object?>? arguments = null)
     {
         var httpContext = new DefaultHttpContext();

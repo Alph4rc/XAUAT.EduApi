@@ -1,45 +1,58 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using Polly;
-using XAUAT.EduApi.Exceptions;
+using XAUAT.EduApi.Caching;
 using XAUAT.EduApi.Extensions;
 using XAUAT.EduApi.Interfaces;
 
 namespace XAUAT.EduApi.Services;
 
-public partial class CookieCodeService(IHttpClientFactory httpClientFactory) : ICookieCodeService
+public partial class CookieCodeService(
+    IHttpClientFactory httpClientFactory,
+    ICacheService? cacheService = null) : ICookieCodeService
 {
     public async Task<string> GetCode(string cookies)
     {
-        var retryPolicy = Policy
-            .Handle<HttpRequestException>()
-            .Or<TaskCanceledException>()
-            .Or<RateLimitException>()
-            .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(6 * Math.Pow(2, retryAttempt - 1)));
-
-        return await retryPolicy.ExecuteAsync(async () =>
+        var identity = HttpContextStudentExtensions.CreateCookieRateLimitIdentity(cookies);
+        if (identity is null || cacheService is null)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, "https://swjw.xauat.edu.cn/student/for-std/precaution");
-            request.Headers.Add("Cookie", cookies);
+            return await FetchCode(cookies);
+        }
 
-            using var httpClient = httpClientFactory.CreateClient("DefaultClient");
-            var response = await httpClient.SendAsync(request);
-
-            if (!response.IsSuccessStatusCode)
+        var code = await cacheService.GetOrCreateAsync<string?>(
+            $"eduapi:student-id:{identity}",
+            async () =>
             {
-                return "";
-            }
+                var result = await FetchCode(cookies);
+                return string.IsNullOrWhiteSpace(result) || result.StartsWith('/') ? null : result;
+            },
+            TimeSpan.FromMinutes(20),
+            CacheLevel.Local);
+        return code ?? "";
+    }
 
-            var a = request.RequestUri!.LocalPath.Replace("/student/precaution/index/", "");
+    private async Task<string> FetchCode(string cookies)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://swjw.xauat.edu.cn/student/for-std/precaution");
+        request.Headers.Add("Cookie", cookies);
 
-            if (a != "/student/for-std/precaution") return a;
-            var content = await response.Content.ReadAsStringAsync();
+        using var httpClient = httpClientFactory.CreateClient("DefaultClient");
+        using var response = await httpClient.SendAsync(request);
+        response.ThrowIfRateLimited();
 
-            content.ThrowIfAuthOrRateLimited();
+        if (!response.IsSuccessStatusCode)
+        {
+            return "";
+        }
 
-            var matches = MyRegex().Matches(content);
-            return matches.Count >= 1 ? string.Join(',', matches.Select(m => m.Groups[1].Value)) : "";
-        });
+        var a = request.RequestUri!.LocalPath.Replace("/student/precaution/index/", "");
+
+        if (a != "/student/for-std/precaution") return a;
+        var content = await response.Content.ReadAsStringAsync();
+
+        content.ThrowIfAuthOrRateLimited();
+
+        var matches = MyRegex().Matches(content);
+        return matches.Count >= 1 ? string.Join(',', matches.Select(m => m.Groups[1].Value)) : "";
     }
 
     public string ParseCookie(IEnumerable<string> cookies)

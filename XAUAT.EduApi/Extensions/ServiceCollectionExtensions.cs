@@ -329,6 +329,7 @@ public static class ServiceCollectionExtensions
                     var language = languageResolver.Resolve(httpContext);
 
                     httpContext.Response.ContentType = "application/json";
+                    httpContext.Response.Headers.RetryAfter = "1";
 
                     var response = new
                     {
@@ -346,7 +347,7 @@ public static class ServiceCollectionExtensions
 
                     return RateLimitPartition.GetConcurrencyLimiter(partitionKey, _ => new ConcurrencyLimiterOptions
                     {
-                        PermitLimit = 8,
+                        PermitLimit = 2,
                         QueueLimit = 16,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst
                     });

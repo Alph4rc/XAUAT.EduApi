@@ -122,14 +122,13 @@ public static class HttpContextStudentExtensions
 
     public static string CreateRequestRateLimitPartitionKey(this HttpRequest request)
     {
-        var path = request.GetRateLimitPath();
-        var cookieIdentity = CreateCookieRateLimitIdentity(request.GetEduAuthCookie()) ?? "cookie:none";
-        var studentIds = request.GetRequestStudentIds();
-        var studentSegment = studentIds.Length == 0
-            ? "student:none"
-            : $"student:{string.Join(",", studentIds.OrderBy(x => x, StringComparer.Ordinal))}";
+        var cookieIdentity = CreateCookieRateLimitIdentity(request.GetEduAuthCookie());
+        if (cookieIdentity is not null) return cookieIdentity;
 
-        return $"{path}|{studentSegment}|{cookieIdentity}";
+        var studentIds = request.GetRequestStudentIds();
+        return studentIds.Length == 0
+            ? request.GetRateLimitPath()
+            : $"student:{string.Join(",", studentIds.OrderBy(x => x, StringComparer.Ordinal))}";
     }
 
     private const string RateLimitKeyPrefix = "rate_limit";

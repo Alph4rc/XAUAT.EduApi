@@ -12,7 +12,15 @@ public class EduCrawlerRateLimitFilter(
 {
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        var studentIds = await ResolveStudentIdsAsync(context);
+        var cookie = context.HttpContext.Request.GetEduAuthCookie();
+        var cookieIdentity = HttpContextStudentExtensions.CreateCookieRateLimitIdentity(cookie);
+        if (cookieIdentity is not null &&
+            rateLimitState.TryGetBlockedUntil(cookieIdentity, out var cookieBlockedUntil))
+        {
+            throw new StudentCooldownException(cookieIdentity, cookieBlockedUntil);
+        }
+
+        var studentIds = await ResolveStudentIdsAsync(context, cookie, cookieIdentity);
         var rateLimitKeys = HttpContextStudentExtensions.CreateRateLimitStateKeys(studentIds);
 
         context.HttpContext.SetResolvedStudentIds(studentIds);
@@ -31,12 +39,11 @@ public class EduCrawlerRateLimitFilter(
         await next();
     }
 
-    private async Task<string[]> ResolveStudentIdsAsync(ActionExecutingContext context)
+    private async Task<string[]> ResolveStudentIdsAsync(
+        ActionExecutingContext context, string cookie, string? cookieIdentity)
     {
         var controllerName = context.Controller.GetType().Name;
         var identities = new List<string>();
-        var cookie = context.HttpContext.Request.GetEduAuthCookie();
-        var cookieIdentity = HttpContextStudentExtensions.CreateCookieRateLimitIdentity(cookie);
         if (!string.IsNullOrWhiteSpace(cookieIdentity))
         {
             identities.Add(cookieIdentity);
@@ -64,6 +71,11 @@ public class EduCrawlerRateLimitFilter(
         {
             var resolvedStudentIds = await cookieCodeService.GetCode(cookie);
             identities.AddRange(HttpContextStudentExtensions.ParseStudentIds(resolvedStudentIds));
+        }
+        catch (RateLimitException) when (cookieIdentity is not null)
+        {
+            var cooldown = rateLimitState.MarkRateLimited(cookieIdentity);
+            throw new StudentCooldownException(cookieIdentity, DateTimeOffset.UtcNow.Add(cooldown));
         }
         catch
         {

@@ -49,7 +49,7 @@ public class StudentRateLimitState : IStudentRateLimitState
             return false;
         }
 
-        if (_states.TryGetValue(identityKey, out var entry))
+        while (_states.TryGetValue(identityKey, out var entry))
         {
             if (entry.BlockedUntil > DateTimeOffset.UtcNow)
             {
@@ -57,18 +57,19 @@ public class StudentRateLimitState : IStudentRateLimitState
                 return true;
             }
 
-            _states.TryRemove(identityKey, out _);
-            return false;
+            if (_states.TryRemove(new KeyValuePair<string, StudentRateLimitEntry>(identityKey, entry)))
+            {
+                break;
+            }
         }
 
-        if (_redis != null && TryGetFromRedis(identityKey, out var redisEntry))
+        if (_redis != null &&
+            TryGetFromRedis(identityKey, out var redisEntry) &&
+            redisEntry.BlockedUntil > DateTimeOffset.UtcNow)
         {
-            _states.TryAdd(identityKey, redisEntry);
-            if (redisEntry.BlockedUntil > DateTimeOffset.UtcNow)
-            {
-                blockedUntil = redisEntry.BlockedUntil;
-                return true;
-            }
+            var active = _states.GetOrAdd(identityKey, redisEntry);
+            blockedUntil = active.BlockedUntil;
+            return true;
         }
 
         return false;

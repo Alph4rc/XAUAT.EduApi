@@ -57,9 +57,10 @@ public class InfoController(
                     client.SetRealisticHeaders();
                     client.Timeout = TimeSpan.FromSeconds(6);
                     client.DefaultRequestHeaders.Add("Cookie", cookie);
-                    var response =
+                    using var response =
                         await client.GetAsync(
                             "https://swjw.xauat.edu.cn/student/ws/student/home-page/programCompletionPreview");
+                    response.ThrowIfRateLimited();
                     var content = await response.Content.ReadAsStringAsync();
 
                     content.ThrowIfAuthOrRateLimited();
