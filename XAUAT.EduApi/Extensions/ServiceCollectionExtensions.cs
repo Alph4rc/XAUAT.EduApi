@@ -125,6 +125,18 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<ILanguageResolver, HeaderLanguageResolver>();
             services.AddSingleton<IApiMessageLocalizer, ApiMessageLocalizer>();
             services.AddScoped<ICodeService, CodeService>();
+            services.AddSingleton<LibrarySeatService>();
+            services.AddHttpClient("LibrarySeatClient", client =>
+            {
+                client.BaseAddress = new Uri("https://libspace.xauat.edu.cn/");
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Mozilla/5.0");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://libspace.xauat.edu.cn");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://libspace.xauat.edu.cn/h5/index.html#/home");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
+                client.DefaultRequestHeaders.TryAddWithoutValidation("lang", "zh");
+            }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
             services.AddScoped<IExamService, ExamService>();
             services.AddScoped<IProgramService, ProgramService>();
             services.AddScoped<IInfoService, InfoService>();
