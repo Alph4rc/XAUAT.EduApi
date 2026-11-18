@@ -153,6 +153,38 @@ public class ElectricityServiceTests
         Assert.Equal("https://example.com/wxCharge?id=4", result);
     }
 
+    [Theory]
+    [InlineData("/wxAccount.aspx", false)]
+    [InlineData("http%3A%2F%2Fdk.xauat.edu.cn%2FwxAccount.aspx", false)]
+    [InlineData("http://dk.xauat.edu.cn/wxAccount.aspx?exp=invalid", false)]
+    [InlineData("http://dk.xauat.edu.cn/wxAccount.aspx?exp=1&sig=test", true)]
+    public async Task Queries_ShouldRejectMalformedOrExpiredUrls_BeforeMakingARequest(string url, bool expired)
+    {
+        var balanceError = await Assert.ThrowsAsync<ElectricityUrlException>(
+            () => _service.FetchCurrentBalanceAsync(url));
+        var weeklyError = await Assert.ThrowsAsync<ElectricityUrlException>(
+            () => _service.FetchWeeklyDataAsync(url));
+        var rechargeError = await Assert.ThrowsAsync<ElectricityUrlException>(
+            () => _service.GetRechargeUrlAsync(url));
+
+        Assert.Equal(expired, balanceError.IsExpired);
+        Assert.Equal(expired, weeklyError.IsExpired);
+        Assert.Equal(expired, rechargeError.IsExpired);
+        _httpClientFactoryMock.Verify(x => x.CreateClient(It.IsAny<string>()), Times.Never);
+        _cacheServiceMock.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task GetRechargeUrlAsync_ShouldChangeOnlyThePage_WhenTheLinkContainsASignedQuery()
+    {
+        var query = $"?ref=wxAccount&exp={DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()}&sig=a%2Fb";
+        var source = $" http://dk.xauat.edu.cn/wxAccount.aspx{query}\u00a0";
+
+        var result = await _service.GetRechargeUrlAsync(source);
+
+        Assert.Equal($"http://dk.xauat.edu.cn/wxCharge.aspx{query}", result);
+    }
+
     private void ConfigureHttpClient(string content, HttpStatusCode statusCode = HttpStatusCode.OK)
     {
         var handlerMock = new Mock<HttpMessageHandler>();

@@ -35,6 +35,8 @@ public class ElectricityController(
     [HttpGet]
     [ProducesResponseType(typeof(double), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status410Gone)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<double>> GetCurrentBalance([FromQuery] string? url = null)
     {
@@ -49,6 +51,10 @@ public class ElectricityController(
             }
 
             return Ok(balance.Value);
+        }
+        catch (ElectricityUrlException ex)
+        {
+            return ElectricityUrlError(ex);
         }
         catch (Exception ex)
         {
@@ -69,6 +75,8 @@ public class ElectricityController(
     /// </remarks>
     [HttpGet("WeeklyData")]
     [ProducesResponseType(typeof(List<ElectricData>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status410Gone)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<List<ElectricData>>> GetWeeklyData([FromQuery] string? url = null)
     {
@@ -77,6 +85,10 @@ public class ElectricityController(
             logger.LogInformation("开始获取电费周明细");
             var data = await service.FetchWeeklyDataAsync(url);
             return Ok(data);
+        }
+        catch (ElectricityUrlException ex)
+        {
+            return ElectricityUrlError(ex);
         }
         catch (Exception ex)
         {
@@ -99,6 +111,8 @@ public class ElectricityController(
     [HttpGet("RechargeUrl")]
     [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status410Gone)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<string>> GetRechargeUrl([FromQuery] string? url = null)
     {
@@ -114,12 +128,20 @@ public class ElectricityController(
 
             return Ok(urlData);
         }
+        catch (ElectricityUrlException ex)
+        {
+            return ElectricityUrlError(ex);
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "获取电费充值地址时出错");
             return StatusCode(500, new ErrorResponse { error = "获取电费充值地址失败" });
         }
     }
+
+    private ObjectResult ElectricityUrlError(ElectricityUrlException exception)
+        => StatusCode(exception.IsExpired ? StatusCodes.Status410Gone : StatusCodes.Status400BadRequest,
+            new ErrorResponse { error = exception.Message });
 
     /// <summary>
     /// 创建或更新电费订阅

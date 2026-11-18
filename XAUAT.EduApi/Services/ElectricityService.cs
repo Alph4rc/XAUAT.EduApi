@@ -1,6 +1,7 @@
 using System.Globalization;
 using EduApi.Data.Models;
 using HtmlAgilityPack;
+using Microsoft.AspNetCore.WebUtilities;
 using XAUAT.EduApi.Caching;
 using XAUAT.EduApi.Extensions;
 
@@ -13,6 +14,12 @@ public interface IElectricityService
     public Task<string?> GetRechargeUrlAsync(string? url = null);
 }
 
+public sealed class ElectricityUrlException(bool isExpired)
+    : Exception(isExpired ? "电费链接已过期，请从微信重新复制" : "请输入完整有效的电费链接")
+{
+    public bool IsExpired { get; } = isExpired;
+}
+
 public class ElectricityService(
     IHttpClientFactory httpClientFactory,
     ICacheService cacheService) : IElectricityService
@@ -22,19 +29,18 @@ public class ElectricityService(
 
     public async Task<double?> FetchCurrentBalanceAsync(string? url = null)
     {
+        var source = ParseSourceUrl(url);
+        if (source is null)
+        {
+            return null;
+        }
+
         try
         {
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                return null;
-            }
-
-            var balance = await cacheService.GetOrCreateAsync(
-                CacheKeys.ElectricityBalance(url),
-                async () => await FetchBalanceFromRemoteAsync(url),
+            return await cacheService.GetOrCreateAsync(
+                CacheKeys.ElectricityBalance(source.OriginalString),
+                () => FetchBalanceFromRemoteAsync(source),
                 BalanceCacheExpiration);
-
-            return balance;
         }
         catch
         {
@@ -44,31 +50,78 @@ public class ElectricityService(
 
     public async Task<List<ElectricData>> FetchWeeklyDataAsync(string? url = null)
     {
-        if (string.IsNullOrWhiteSpace(url))
+        var source = ParseSourceUrl(url);
+        if (source is null)
         {
             return [];
         }
 
-        var detailUrl = url.Replace("wxAccount", "wxElecDtl");
+        var detailUrl = WithAccountPage(source, "wxElecDtl");
         return await cacheService.GetOrCreateAsync(
-            CacheKeys.ElectricityWeeklyData(url),
-            async () => await FetchWeeklyDataFromRemoteAsync(detailUrl),
+            CacheKeys.ElectricityWeeklyData(source.OriginalString),
+            () => FetchWeeklyDataFromRemoteAsync(detailUrl),
             WeeklyDataCacheExpiration, isUse: false);
     }
 
     public Task<string?> GetRechargeUrlAsync(string? url = null)
     {
-        try
-        {
-            return Task.FromResult(string.IsNullOrWhiteSpace(url) ? null : url.Replace("wxAccount", "wxCharge"));
-        }
-        catch (Exception exception)
-        {
-            return Task.FromException<string?>(exception);
-        }
+        var source = ParseSourceUrl(url);
+        return Task.FromResult(source is null ? null : WithAccountPage(source, "wxCharge").AbsoluteUri);
     }
 
-    private async Task<double?> FetchBalanceFromRemoteAsync(string resolvedUrl)
+    private static Uri? ParseSourceUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        var input = url.Trim();
+        if (!Uri.TryCreate(input, UriKind.Absolute, out var source) ||
+            source.Scheme is not ("http" or "https") ||
+            string.IsNullOrEmpty(source.Host) || source.UserInfo.Length > 0 ||
+            input.Any(c => c == '\\' || char.IsWhiteSpace(c) || char.IsControl(c)))
+        {
+            throw new ElectricityUrlException(isExpired: false);
+        }
+
+        var query = QueryHelpers.ParseQuery(source.Query);
+        if (query.TryGetValue("exp", out var values))
+        {
+            if (values.Count != 1 ||
+                !long.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var expiration))
+            {
+                throw new ElectricityUrlException(isExpired: false);
+            }
+
+            if (expiration <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            {
+                throw new ElectricityUrlException(isExpired: true);
+            }
+        }
+
+        return source;
+    }
+
+    private static Uri WithAccountPage(Uri source, string page)
+    {
+        var path = source.AbsolutePath;
+        var pageStart = path.LastIndexOf('/') + 1;
+        var accountPage = path[pageStart..];
+        if (accountPage.Equals("wxAccount.aspx", StringComparison.OrdinalIgnoreCase))
+        {
+            return new UriBuilder(source) { Path = path[..pageStart] + page + ".aspx" }.Uri;
+        }
+
+        if (accountPage.Equals("wxAccount", StringComparison.OrdinalIgnoreCase))
+        {
+            return new UriBuilder(source) { Path = path[..pageStart] + page }.Uri;
+        }
+
+        return source;
+    }
+
+    private async Task<double?> FetchBalanceFromRemoteAsync(Uri resolvedUrl)
     {
         using var httpClient = httpClientFactory.CreateClient();
 
@@ -106,7 +159,7 @@ public class ElectricityService(
         return null;
     }
 
-    private async Task<List<ElectricData>> FetchWeeklyDataFromRemoteAsync(string detailUrl)
+    private async Task<List<ElectricData>> FetchWeeklyDataFromRemoteAsync(Uri detailUrl)
     {
         using var httpClient = httpClientFactory.CreateClient();
         using var response = await httpClient.GetAsync(detailUrl);

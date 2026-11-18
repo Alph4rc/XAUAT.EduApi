@@ -32,6 +32,9 @@ public static class ApiCodes
     /// <summary>资源未找到</summary>
     public const int NotFound = 30001;
 
+    /// <summary>学校签发的电费链接已过期</summary>
+    public const int ElectricityUrlExpired = 30002;
+
     /// <summary>请求频率限制</summary>
     public const int RateLimited = 40001;
 
